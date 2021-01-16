@@ -70,6 +70,7 @@
 //-------
 #define SLEEP_TIME         8000 // Sleep time between reads (in milliseconds)
 #define CHILD_ID           0
+#define LUX_DIFF           10 // only report if this much change in lux happened
 
 //-------
 // Battery config
@@ -112,12 +113,13 @@ void loop()
   uint16_t currlux = lightSensor.getLightIntensity();
 
   if (currlux != lastlux) {
-    uint8_t newstate = 0;
+    uint8_t newstate = doorstate;
+    int16_t diff = currlux - lastlux;
 
-    if (currlux > lastlux) {
+    if (diff >= LUX_DIFF) {
       // new lux is brighter, i.e. box opened
       newstate = 1;
-    } else {
+    } else if (abs(diff) >= LUX_DIFF) {
       // new lux is less than before (i.e. box closed)
       newstate = 0;
     }
