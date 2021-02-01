@@ -166,7 +166,7 @@ uint8_t mvToPercent(float mvolts) {
   return (pct >= 100) ? 100 : pct;
 }
 
-float getBattPercent() {
+uint8_t getBattPercent() {
   // https://learn.adafruit.com/adafruit-feather-328p-atmega328-atmega328p/power-management#measuring-battery-2981135-7
   //
   // two 100k resistors and ADC ref of 3.3V
@@ -180,5 +180,5 @@ float getBattPercent() {
 
   Printf("---VBAT: %umv\n", vbatmv);
 
-  return mvToPercent(vbatmv);
+  return round(mvToPercent(vbatmv));
 }
