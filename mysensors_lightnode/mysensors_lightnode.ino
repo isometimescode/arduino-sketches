@@ -80,6 +80,8 @@
 #define VBAT_DIVIDER_COMP  (2.0F)          // Compensation factor for the VBAT divider
 #define REAL_VBAT_MV_PER_LSB (VBAT_DIVIDER_COMP * VBAT_MV_PER_LSB)
 
+#define BATT_DIFF          2 // only report if this much change in battery pct
+
 //-------
 // Required libraries
 //
@@ -140,7 +142,7 @@ void loop()
   uint8_t vbatPct = getBattPercent();
   Printf("---VBAT: %u%%\n", vbatPct);
 
-  if (oldVbatPct != vbatPct) {
+  if (abs(oldVbatPct - vbatPct) >= BATT_DIFF) {
     sendBatteryLevel(vbatPct);
     oldVbatPct = vbatPct;
   }
