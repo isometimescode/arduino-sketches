@@ -36,16 +36,10 @@
 
 // #define MY_DEBUG
 // #define MY_DEBUG_VERBOSE_RFM69
-#define LOCAL_DEBUG
-#ifdef LOCAL_DEBUG
-  #define Printf(...) {char printBuf[24]; sprintf(printBuf, __VA_ARGS__) ; Serial.print(printBuf);}
-#else
-  #define Printf(...);
-#endif
-
+// #define LOCAL_DEBUG
 
 //-------
-// Arduino Pro Mini + RFM69HCW radio
+// Arduino Pro Mini + RFM69HW radio
 //-------
 #define MY_RADIO_RFM69
 #define MY_RFM69_NEW_DRIVER
@@ -63,45 +57,63 @@
 //-------
 // Sensor logic config
 //-------
-#define SLEEP_TIME       300000 // Sleep time between reads (in milliseconds)
+#define SLEEP_TIME       300000 // Sleep time between reads (in milliseconds) = 5 min
 #define TEMP_CHILD_ID         0
+#define TEMP_DIFF           0.1 // only report if new value is different
+
 #define HUM_CHILD_ID          1
+#define HUM_DIFF            0.5 // only report if new value is different
+
 #define BARO_CHILD_ID         2
+#define BARO_DIFF          0.01 // only report if new value is different
+#define ONE_INHG        3386.39 // 1 inch Hg = 3386.39 Pascal
 
 #define BME_ADDR           0x76
 #define USE_FAHRENHEIT        1
-#define DIFF_THRESHOLD      0.1 // only report if new value is different
 
 //-------
 // Battery config
 //-------
-// TODO
+#define FULL_BATTERY 3 // 3V for 2xAA alkaline
 
 //-------
-// Required libraries
+// Required external libraries
 //
-// MySensors (https://www.arduino.cc/reference/en/libraries/mysensors/)
-// SparkFun BME280 (https://www.arduino.cc/reference/en/libraries/sparkfun-bme280/)
+// MySensors v2.4.0-alpha (development) (https://github.com/mysensors/MySensors)
+// SparkFun BME280 v2.0.9 (https://www.arduino.cc/reference/en/libraries/sparkfun-bme280/)
 //-------
+#include <Wire.h>
 #include <MySensors.h>
 #include <SparkFunBME280.h>
 
+// redefine to change pressure to inHg
+struct BME280_LastMeasurements
+{
+  public:
+	float temperature;
+	float pressureInHg;
+	float humidity;
+};
+
 BME280 bme;
-BME280_SensorMeasurements oldM;
+BME280_LastMeasurements oldM;
 BME280_SensorMeasurements newM;
 
 MyMessage temperatureMsg(TEMP_CHILD_ID, V_TEMP);
 MyMessage humidityMsg(HUM_CHILD_ID, V_HUM);
 MyMessage pressureMsg(BARO_CHILD_ID, V_PRESSURE);
 
-uint8_t oldVbatPct = 0;
+uint8_t oldBatteryPcnt = 0;
 
 void setup()
 {
   unsigned status;
+  Wire.begin();
   bme.setI2CAddress(BME_ADDR);
   if(bme.beginI2C() == false) {
-    Printf("sensor not found\n");
+#ifdef LOCAL_DEBUG
+    Serial.println("No sensor found; checking wiring");
+#endif
     while(1); // can't do anything without a sensor
   }
 
@@ -127,46 +139,95 @@ void loop()
   //
   bme.setMode(MODE_FORCED);
 
+#ifdef LOCAL_DEBUG
+  Serial.println("Begin measuring");
+#endif
   while(bme.isMeasuring() == false) ; // sensor is waking up
   while(bme.isMeasuring() == true) ;  // actually taking a measurement
+#ifdef LOCAL_DEBUG
+  Serial.println("End measuring");
+#endif
 
    // retrieve all register data at the same time for efficiency
    // see Bosch datasheet section 4 for burst reading details
   bme.readAllMeasurements(&newM, USE_FAHRENHEIT);
 
-  oldM.temperature = sendSensorValue(oldM.temperature, newM.temperature, temperatureMsg);
-  oldM.humidity = sendSensorValue(oldM.humidity, newM.humidity, humidityMsg);
-  oldM.pressure = sendSensorValue(oldM.pressure, newM.pressure, pressureMsg);
+  oldM.temperature = sendSensorValue(
+    oldM.temperature, newM.temperature, TEMP_DIFF, temperatureMsg);
+
+  oldM.humidity = sendSensorValue(
+    oldM.humidity, newM.humidity, HUM_DIFF, humidityMsg);
+
+  oldM.pressureInHg = sendSensorValue(
+    oldM.pressureInHg, pressureToInHg(newM.pressure), BARO_DIFF, pressureMsg);
 
   // 2. Check battery percentage for changes
   //
-  // checkBattery();
+  checkBattery();
 
   // 3. All done, wait until next interval
   //
+#ifdef LOCAL_DEBUG
+  Serial.print(SLEEP_TIME/1000/60);
+  Serial.println(" minute sleep");
+#endif
   sleep(SLEEP_TIME);
+#ifdef LOCAL_DEBUG
+  Serial.println("Awake!");
+#endif
 }
 
-float sendSensorValue(float oldValue, float newValue, MyMessage &msg) {
+float sendSensorValue(float oldValue, float newValue, float diffThreshold, MyMessage &msg) {
 #ifdef LOCAL_DEBUG
   Serial.print(oldValue, 1); Serial.print(" vs "); Serial.println(newValue, 1);
 #endif
 
-  if (abs(newValue - oldValue) < DIFF_THRESHOLD) {
-    Printf("threshold not met\n");
-  } else {
-    send(msg.set(newValue, 1));
+  if (abs(newValue - oldValue) < diffThreshold) {
+#ifdef LOCAL_DEBUG
+    Serial.print(abs(newValue - oldValue));
+    Serial.print(" < ");
+    Serial.print(diffThreshold);
+    Serial.println("; skip sending");
+#endif
+    return oldValue;
   }
+
+#ifdef LOCAL_DEBUG
+    Serial.print(abs(newValue - oldValue));
+    Serial.print(" > ");
+    Serial.print(diffThreshold);
+    Serial.print("; sending: ");
+    Serial.println(newValue, 1);
+#endif
+
+  send(msg.set(newValue, 2));
   return newValue;
 }
 
+float pressureToInHg(float value) {
+  // default value is Pa
+  // silly US uses inHg
+  return value / ONE_INHG;
+}
+
+// https://www.mysensors.org/build/battery#measuring-and-reporting-battery-level
 void checkBattery() {
-  uint8_t vbatPct = 0; // TODO
+	// get the battery voltage
+	long batteryMillivolts = hwCPUVoltage();
+	uint8_t batteryPcnt = batteryMillivolts / FULL_BATTERY / 1000.0 * 100 + 0.5;
+  batteryPcnt = min(batteryPcnt, 100);
 
-  Printf("---VBAT: %u%%\n", vbatPct);
+#ifdef LOCAL_DEBUG
+	Serial.print("Battery voltage: ");
+	Serial.print(batteryMillivolts / 1000.0);
+	Serial.println("V");
+	Serial.print("Battery percent: ");
+	Serial.print(batteryPcnt);
+	Serial.println(" %");
+#endif
 
-  if (oldVbatPct != vbatPct) {
-    sendBatteryLevel(vbatPct);
-    oldVbatPct = vbatPct;
-  }
+	if (oldBatteryPcnt != batteryPcnt) {
+		sendBatteryLevel(batteryPcnt);
+		oldBatteryPcnt = batteryPcnt;
+	}
 }

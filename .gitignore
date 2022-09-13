@@ -1,0 +1,6 @@
+# arduino libraries unneeded in source control
+libraries/
+
+# transient files like build cache and vscode arduino-cli config
+build/
+.vscode/
